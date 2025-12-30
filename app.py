@@ -3,42 +3,73 @@ import tensorflow as tf
 from PIL import Image, ImageOps
 import numpy as np
 import cv2
+import os
 
-# --- PAGE SETUP ---
-st.set_page_config(page_title="Real-time Eye Monitor", page_icon="👁️")
-st.title("👁️ AI Eye State Detector")
-st.write("Use your camera to check if your eyes are open or closed.")
+# --- Page Configuration ---
+st.set_page_config(page_title="AI Eye State Monitor", page_icon="👁️")
 
-# --- LOAD MODEL ---
+st.markdown("""
+    <style>
+    .main {text-align: center;}
+    .stMetric {background-color: #f0f2f6; padding: 10px; border-radius: 10px;}
+    </style>
+    """, unsafe_allow_status_code=True)
+
+st.title("👁️ Smart Eye State Classifier")
+st.info("Upload a photo or use the camera to detect if eyes are Open or Closed.")
+
+# --- Load Model & Face Detector ---
 @st.cache_resource
-def load_model():
-    return tf.keras.models.load_model('eye_state_cnn.h5')
+def load_resources():
+    model = tf.keras.models.load_model('eye_state_cnn.h5')
+    # Use OpenCV's built-in Haar Cascade for eye detection
+    eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
+    return model, eye_cascade
 
-model = load_model()
+model, eye_cascade = load_resources()
 
-# --- CAMERA INPUT ---
-img_file_buffer = st.camera_input("Take a photo of your eye")
+# --- Input Choice ---
+input_mode = st.radio("Select Input:", ["Camera Snapshot", "Upload Image"])
 
-if img_file_buffer is not None:
-    # 1. Convert buffer to PIL Image
-    img = Image.open(img_file_buffer)
+if input_mode == "Camera Snapshot":
+    img_file = st.camera_input("Take a photo")
+else:
+    img_file = st.file_uploader("Choose an image", type=['jpg', 'png', 'jpeg'])
+
+if img_file:
+    # Convert to OpenCV format
+    image = Image.open(img_file)
+    frame = np.array(image)
+    gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
     
-    # 2. Preprocess (Grayscale, Resize, Normalize)
-    # MRL dataset was trained on Grayscale 64x64 images
-    img_gray = ImageOps.grayscale(img)
-    img_resized = img_gray.resize((64, 64))
-    img_array = np.array(img_resized) / 255.0
-    img_array = img_array.reshape(1, 64, 64, 1) # Match CNN input shape
-
-    # 3. Prediction
-    prediction = model.predict(img_array)[0][0]
+    # Detect Eyes
+    eyes = eye_cascade.detectMultiScale(gray, 1.3, 5)
     
-    # --- UI DISPLAY ---
-    if prediction > 0.5:
-        st.success("STATE: OPEN")
-        st.balloons()
+    if len(eyes) == 0:
+        st.warning("No eyes detected. Please look directly at the camera.")
     else:
-        st.error("STATE: CLOSED")
-        st.warning("Drowsiness Alert!")
-
-    st.write(f"**Confidence Score:** {prediction if prediction > 0.5 else 1 - prediction:.2%}")
+        for (x, y, w, h) in eyes[:1]: # Take the first detected eye
+            # Extract and Preprocess the eye region
+            roi_gray = gray[y:y+h, x:x+w]
+            roi_resized = cv2.resize(roi_gray, (64, 64))
+            roi_normalized = roi_resized / 255.0
+            roi_input = roi_normalized.reshape(1, 64, 64, 1)
+            
+            # Predict
+            prediction = model.predict(roi_input)[0][0]
+            label = "OPEN" if prediction > 0.5 else "CLOSED"
+            confidence = prediction if prediction > 0.5 else 1 - prediction
+            
+            # Display Results
+            col1, col2 = st.columns(2)
+            with col1:
+                st.image(roi_gray, caption="Detected Eye Region", width=150)
+            with col2:
+                color = "green" if label == "OPEN" else "red"
+                st.markdown(f"### Result: :{color}[{label}]")
+                st.write(f"Confidence: **{confidence:.2%}**")
+                
+                if label == "CLOSED":
+                    st.warning("⚠️ Drowsiness Detected!")
+                else:
+                    st.success("✅ Driver is Alert")
