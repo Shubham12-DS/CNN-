@@ -2,32 +2,43 @@ import streamlit as st
 import tensorflow as tf
 from PIL import Image, ImageOps
 import numpy as np
+import cv2
 
-st.set_page_config(page_title="CNN Eye Detector", page_icon="👁️")
-st.title("👁️ MRL Eye State Classifier")
+# --- PAGE SETUP ---
+st.set_page_config(page_title="Real-time Eye Monitor", page_icon="👁️")
+st.title("👁️ AI Eye State Detector")
+st.write("Use your camera to check if your eyes are open or closed.")
 
+# --- LOAD MODEL ---
 @st.cache_resource
-def load_my_model():
+def load_model():
     return tf.keras.models.load_model('eye_state_cnn.h5')
 
-model = load_my_model()
+model = load_model()
 
-uploaded_file = st.file_uploader("Upload an eye image...", type=["jpg", "png", "jpeg"])
+# --- CAMERA INPUT ---
+img_file_buffer = st.camera_input("Take a photo of your eye")
 
-if uploaded_file:
-    image = Image.open(uploaded_file)
-    st.image(image, caption="Input Image", width=200)
+if img_file_buffer is not None:
+    # 1. Convert buffer to PIL Image
+    img = Image.open(img_file_buffer)
     
-    # Preprocessing to match training data
-    image = ImageOps.grayscale(image)
-    image = image.resize((64, 64))
-    img_array = np.array(image) / 255.0
-    img_array = img_array.reshape(1, 64, 64, 1) # Add batch and channel dim
-    
-    # Predict
+    # 2. Preprocess (Grayscale, Resize, Normalize)
+    # MRL dataset was trained on Grayscale 64x64 images
+    img_gray = ImageOps.grayscale(img)
+    img_resized = img_gray.resize((64, 64))
+    img_array = np.array(img_resized) / 255.0
+    img_array = img_array.reshape(1, 64, 64, 1) # Match CNN input shape
+
+    # 3. Prediction
     prediction = model.predict(img_array)[0][0]
-    label = "OPEN" if prediction > 0.5 else "CLOSED"
-    confidence = prediction if prediction > 0.5 else 1 - prediction
     
-    st.metric(label="Predicted State", value=label)
-    st.write(f"Confidence: {confidence:.2%}")
+    # --- UI DISPLAY ---
+    if prediction > 0.5:
+        st.success("STATE: OPEN")
+        st.balloons()
+    else:
+        st.error("STATE: CLOSED")
+        st.warning("Drowsiness Alert!")
+
+    st.write(f"**Confidence Score:** {prediction if prediction > 0.5 else 1 - prediction:.2%}")
